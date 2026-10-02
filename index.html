@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="manifest" href="manifest.json">
+  <title>Offline WebLLM</title>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, sans-serif; margin: 0; padding: 0; }
+    body { background: #f0f2f5; display: flex; flex-direction: column; height: 100vh; padding: 12px; }
+    #status { padding: 10px; background: #e3edfc; color: #1a73e8; border-radius: 8px; text-align: center; margin-bottom: 8px; font-size: 0.85rem; }
+    #chat { flex: 1; overflow-y: auto; background: white; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+    .msg { padding: 8px 12px; border-radius: 8px; max-width: 80%; font-size: 0.95rem; }
+    .user { background: #1a73e8; color: white; align-self: flex-end; }
+    .ai { background: #e9ecef; color: #333; align-self: flex-start; }
+    .input-area { display: flex; gap: 8px; margin-top: 8px; }
+    input { flex: 1; padding: 10px; border-radius: 6px; border: 1px solid #ccc; outline: none; }
+    button { padding: 10px 16px; background: #1a73e8; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; }
+    button:disabled { background: #aaa; }
+  </style>
+</head>
+<body>
+
+  <div id="status">Checking offline cache...</div>
+  <div id="chat"></div>
+
+  <div class="input-area">
+    <input type="text" id="userInput" placeholder="Ask anything..." disabled>
+    <button id="sendBtn" onclick="sendMsg()" disabled>Send</button>
+  </div>
+
+  <script type="module">
+    // 1. REGISTER THE SERVICE WORKER (The Slow Roads trick)
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+          .then(() => console.log("Offline Service Worker Active!"))
+          .catch((err) => console.log("SW failed:", err));
+      });
+    }
+
+    import * as webllm from "https://esm.run/@mlc-ai/web-llm";
+
+    const statusDiv = document.getElementById("status");
+    const input = document.getElementById("userInput");
+    const sendBtn = document.getElementById("sendBtn");
+    let engine;
+
+    // Use a tiny 360M model so it loads quickly and fits iPad RAM
+    const SELECTED_MODEL = "SmolLM2-360M-Instruct-q4f16_1-MLC";
+
+    async function initModel() {
+      try {
+        engine = new webllm.MLCEngine();
+        engine.setInitProgressCallback((report) => {
+          statusDiv.innerText = report.text;
+        });
+
+        // Downloads weights to IndexedDB cache on first visit, then stays forever
+        await engine.reload(SELECTED_MODEL);
+
+        statusDiv.innerHTML = "<strong>Ready! Works 100% offline anytime, even if closed.</strong>";
+        input.disabled = false;
+        sendBtn.disabled = false;
+      } catch (err) {
+        statusDiv.innerText = "Error: " + err.message;
+      }
+    }
+
+    window.sendMsg = async function() {
+      const text = input.value.trim();
+      if (!text || !engine) return;
+
+      append(text, "user");
+      input.value = "";
+      sendBtn.disabled = true;
+
+      const aiMsgId = append("Thinking...", "ai");
+      
+      const reply = await engine.chat.completions.create({
+        messages: [{ role: "user", content: text }]
+      });
+
+      document.getElementById(aiMsgId).innerText = reply.choices[0].message.content;
+      sendBtn.disabled = false;
+    };
+
+    function append(text, cls) {
+      const box = document.getElementById("chat");
+      const div = document.createElement("div");
+      const id = "msg-" + Date.now();
+      div.id = id;
+      div.className = "msg " + cls;
+      div.innerText = text;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+      return id;
+    }
+
+    initModel();
+  </script>
+</body>
+</html>
